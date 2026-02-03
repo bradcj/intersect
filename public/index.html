@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Intersect - Find Your Musical Intersection</title>
+        <link rel="stylesheet" href="styles.css" />
+    </head>
+    <body>
+        <div class="container">
+            <!-- Header -->
+            <header>
+                <div class="logo">
+                    <h1>⊕ Intersect</h1>
+                    <p class="tagline">Where musical tastes intersect</p>
+                </div>
+                <div id="userInfo" class="user-info" style="display: none">
+                    <span id="userName"></span>
+                    <button id="signOutBtn" class="btn-secondary">
+                        Sign Out
+                    </button>
+                </div>
+            </header>
+
+            <!-- Landing Page -->
+            <section id="landingPage" class="section">
+                <div class="hero">
+                    <h2>Discover Your Shared Music</h2>
+                    <p>
+                        Create playlists from songs you all love. Connect with
+                        friends and family to find your musical common ground.
+                    </p>
+                    <button id="signInBtn" class="btn-primary btn-large">
+                        <svg
+                            width="18"
+                            height="18"
+                            viewBox="0 0 18 18"
+                            style="margin-right: 8px"
+                        >
+                            <path
+                                fill="#4285F4"
+                                d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"
+                            />
+                            <path
+                                fill="#34A853"
+                                d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"
+                            />
+                            <path
+                                fill="#FBBC05"
+                                d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707 0-.593.102-1.17.282-1.709V4.958H.957C.347 6.173 0 7.548 0 9c0 1.452.348 2.827.957 4.042l3.007-2.335z"
+                            />
+                            <path
+                                fill="#EA4335"
+                                d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"
+                            />
+                        </svg>
+                        Sign in with Google
+                    </button>
+                </div>
+
+                <div class="features">
+                    <div class="feature-card">
+                        <div class="feature-icon">🎵</div>
+                        <h3>Connect Accounts</h3>
+                        <p>
+                            Link your YouTube Music account securely via Google
+                            OAuth
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">👥</div>
+                        <h3>Create Groups</h3>
+                        <p>
+                            Invite friends and family to join your music group
+                        </p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">⊕</div>
+                        <h3>Find Intersection</h3>
+                        <p>Generate playlists with songs everyone has liked</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Dashboard -->
+            <section id="dashboard" class="section" style="display: none">
+                <div class="dashboard-content">
+                    <!-- Connection Status -->
+                    <div class="card" id="connectionCard">
+                        <h3>YouTube Music Connection</h3>
+                        <div id="notConnected" style="display: none">
+                            <p>
+                                Connect your YouTube Music account to get
+                                started.
+                            </p>
+                            <button id="connectYTMusicBtn" class="btn-primary">
+                                Connect YouTube Music
+                            </button>
+                        </div>
+                        <div id="connected" style="display: none">
+                            <p class="status-badge success">✓ Connected</p>
+                            <button
+                                id="refreshConnectionBtn"
+                                class="btn-secondary"
+                            >
+                                Reconnect
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Groups Section -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Your Groups</h3>
+                            <button id="createGroupBtn" class="btn-primary">
+                                + Create Group
+                            </button>
+                        </div>
+                        <div id="groupsList" class="groups-list">
+                            <p class="empty-state">
+                                No groups yet. Create one to get started!
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Create Group Modal -->
+            <div id="createGroupModal" class="modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>Create New Group</h3>
+                        <button class="modal-close" id="closeCreateGroupModal">
+                            &times;
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <label for="groupName">Group Name</label>
+                        <input
+                            type="text"
+                            id="groupName"
+                            placeholder="e.g., Road Trip Crew"
+                            class="input-field"
+                        />
+                    </div>
+                    <div class="modal-footer">
+                        <button id="cancelCreateGroup" class="btn-secondary">
+                            Cancel
+                        </button>
+                        <button id="submitCreateGroup" class="btn-primary">
+                            Create Group
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Group Detail Modal -->
+            <div id="groupDetailModal" class="modal">
+                <div class="modal-content modal-large">
+                    <div class="modal-header">
+                        <h3 id="groupDetailName">Group Name</h3>
+                        <button class="modal-close" id="closeGroupDetailModal">
+                            &times;
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="group-info">
+                            <p>
+                                <strong>Group ID:</strong>
+                                <code id="groupIdDisplay"></code>
+                            </p>
+                            <p>
+                                <strong>Members:</strong>
+                                <span id="memberCount">0</span>
+                            </p>
+                        </div>
+
+                        <div class="action-section">
+                            <h4>Share this Group</h4>
+                            <p>Share this ID with others so they can join:</p>
+                            <div class="copy-box">
+                                <input
+                                    type="text"
+                                    id="groupIdCopy"
+                                    readonly
+                                    class="input-field"
+                                />
+                                <button
+                                    id="copyGroupIdBtn"
+                                    class="btn-secondary"
+                                >
+                                    Copy
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="action-section">
+                            <h4>Generate Playlist</h4>
+                            <p>
+                                Create a playlist with songs that all members
+                                have liked.
+                            </p>
+                            <button
+                                id="generatePlaylistBtn"
+                                class="btn-primary btn-large"
+                            >
+                                Generate Intersection Playlist
+                            </button>
+                            <div
+                                id="playlistResult"
+                                style="display: none; margin-top: 16px"
+                            ></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Join Group Modal -->
+            <div id="joinGroupModal" class="modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>Join Group</h3>
+                        <button class="modal-close" id="closeJoinGroupModal">
+                            &times;
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <label for="joinGroupId">Group ID</label>
+                        <input
+                            type="text"
+                            id="joinGroupId"
+                            placeholder="Paste group ID here"
+                            class="input-field"
+                        />
+                    </div>
+                    <div class="modal-footer">
+                        <button id="cancelJoinGroup" class="btn-secondary">
+                            Cancel
+                        </button>
+                        <button id="submitJoinGroup" class="btn-primary">
+                            Join Group
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loading Overlay -->
+            <div
+                id="loadingOverlay"
+                class="loading-overlay"
+                style="display: none"
+            >
+                <div class="spinner"></div>
+                <p>Loading...</p>
+            </div>
+        </div>
+
+        <!-- Firebase SDKs -->
+        <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+        <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+        <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-functions-compat.js"></script>
+
+        <!-- App JavaScript -->
+        <script src="app.js"></script>
+    </body>
+</html>

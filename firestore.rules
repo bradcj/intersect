@@ -1,0 +1,51 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user owns a document
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+    
+    // Users collection - users can only read/write their own data
+    match /users/{userId} {
+      allow read, write: if isSignedIn() && isOwner(userId);
+    }
+    
+    // OAuth states - only writable by Cloud Functions (via admin SDK)
+    match /oauth_states/{stateId} {
+      allow read: if isSignedIn();
+      allow write: if false; // Only Cloud Functions can write
+    }
+    
+    // Groups collection
+    match /groups/{groupId} {
+      // Anyone can read group data if they're authenticated
+      allow read: if isSignedIn();
+      
+      // Only authenticated users can create groups
+      allow create: if isSignedIn() && 
+                      request.resource.data.host_user_id == request.auth.uid &&
+                      request.resource.data.members[0] == request.auth.uid;
+      
+      // Only group members can update
+      allow update: if isSignedIn() && 
+                      request.auth.uid in resource.data.members;
+      
+      // Only host can delete
+      allow delete: if isSignedIn() && 
+                      request.auth.uid == resource.data.host_user_id;
+    }
+    
+    // Default deny all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
