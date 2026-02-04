@@ -408,6 +408,27 @@ label {
     flex: 1;
 }
 
+.members-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.member-item {
+    padding: 12px;
+    background-color: var(--bg-secondary);
+    border-radius: 8px;
+    border-left: 4px solid var(--primary);
+}
+
+.member-item p {
+    margin: 0;
+}
+
+.member-item strong {
+    color: var(--text-primary);
+}
+
 .success-message {
     background: #d1fae5;
     border: 1px solid #6ee7b7;

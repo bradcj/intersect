@@ -261,11 +261,36 @@ def get_user_groups(req: https_fn.Request) -> https_fn.Response:
         groups = []
         for doc in query.stream():
             group_data = doc.to_dict()
+
+            # Fetch member details from Firebase Auth
+            member_details = []
+            for member_id in group_data.get("members", []):
+                try:
+                    user_record = admin_auth.get_user(member_id)
+                    member_details.append(
+                        {
+                            "uid": member_id,
+                            "email": user_record.email,
+                            "display_name": user_record.display_name
+                            or user_record.email,
+                        }
+                    )
+                except Exception as e:
+                    print(f"Could not fetch user details for {member_id}: {e}")
+                    member_details.append(
+                        {
+                            "uid": member_id,
+                            "email": "Unknown",
+                            "display_name": "Unknown User",
+                        }
+                    )
+
             groups.append(
                 {
                     "id": doc.id,
                     "name": group_data["name"],
                     "member_count": len(group_data["members"]),
+                    "members": member_details,
                     "is_host": group_data["host_user_id"] == user_id,
                     "created_at": (
                         group_data.get("created_at").isoformat()

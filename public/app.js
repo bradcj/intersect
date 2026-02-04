@@ -289,6 +289,19 @@ function openGroupDetail(groupId) {
     document.getElementById('groupIdCopy').value = groupId;
     document.getElementById('memberCount').textContent = group.member_count;
 
+    // Display members list
+    const membersList = document.getElementById('membersList');
+    if (group.members && group.members.length > 0) {
+        membersList.innerHTML = group.members.map(member => `
+            <div class="member-item">
+                <p><strong>${escapeHtml(member.display_name)}</strong></p>
+                <p style="color: #666; font-size: 0.9em;">${escapeHtml(member.email)}</p>
+            </div>
+        `).join('');
+    } else {
+        membersList.innerHTML = '<p class="empty-state">No members found</p>';
+    }
+
     // Store current group ID
     groupDetailModal.dataset.groupId = groupId;
 
