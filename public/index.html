@@ -89,22 +89,10 @@
                     <div class="card" id="connectionCard">
                         <h3>YouTube Music Connection</h3>
                         <div id="notConnected" style="display: none">
-                            <p>
-                                Connect your YouTube Music account to get
-                                started.
-                            </p>
-                            <button id="connectYTMusicBtn" class="btn-primary">
-                                Connect YouTube Music
-                            </button>
+                            <p class="status-badge">⏳ Connecting...</p>
                         </div>
                         <div id="connected" style="display: none">
                             <p class="status-badge success">✓ Connected</p>
-                            <button
-                                id="refreshConnectionBtn"
-                                class="btn-secondary"
-                            >
-                                Reconnect
-                            </button>
                         </div>
                     </div>
 
@@ -112,9 +100,14 @@
                     <div class="card">
                         <div class="card-header">
                             <h3>Your Groups</h3>
-                            <button id="createGroupBtn" class="btn-primary">
-                                + Create Group
-                            </button>
+                            <div style="display: flex; gap: 10px">
+                                <button id="createGroupBtn" class="btn-primary">
+                                    + Create Group
+                                </button>
+                                <button id="joinGroupBtn" class="btn-secondary">
+                                    Join Group
+                                </button>
+                            </div>
                         </div>
                         <div id="groupsList" class="groups-list">
                             <p class="empty-state">
@@ -259,6 +252,9 @@
         <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-functions-compat.js"></script>
+
+        <!-- Firebase Config (not committed to git) -->
+        <script src="firebase-config.js"></script>
 
         <!-- App JavaScript -->
         <script src="app.js"></script>
