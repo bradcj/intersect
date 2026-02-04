@@ -336,8 +336,7 @@ document.getElementById('generatePlaylistBtn').addEventListener('click', async (
 
     try {
         showLoading();
-        const generatePlaylist = functions.httpsCallable('generate_playlist');
-        const result = await generatePlaylist({ group_id: groupId });
+        const result = await callFunction('generate_playlist', { group_id: groupId });
 
         hideLoading();
 
@@ -345,8 +344,8 @@ document.getElementById('generatePlaylistBtn').addEventListener('click', async (
         resultDiv.style.display = 'block';
         resultDiv.innerHTML = `
             <div class="success-message">
-                <p>✓ ${result.data.message}</p>
-                <p>Found ${result.data.intersection_count} songs in common</p>
+                <p>✓ ${result.message}</p>
+                <p>Found ${result.intersection_count} songs in common</p>
             </div>
         `;
     } catch (error) {

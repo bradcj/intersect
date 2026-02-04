@@ -468,3 +468,99 @@ def join_group(req: https_fn.Request) -> https_fn.Response:
                 "Access-Control-Allow-Origin": "*",
             },
         )
+
+
+@https_fn.on_request()
+def generate_playlist(req: https_fn.Request) -> https_fn.Response:
+    """Generate intersection playlist for a group"""
+    # Handle preflight
+    if req.method == "OPTIONS":
+        return https_fn.Response(
+            "",
+            status=204,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            },
+        )
+
+    try:
+        # Verify authentication
+        user_id = verify_auth_token(req)
+
+        # Parse request body
+        raw_data = req.get_json()
+        print(f"generate_playlist request data: {raw_data}")
+
+        # Extract from nested 'data' key if present
+        data = raw_data.get("data", raw_data) if raw_data else {}
+        group_id = data.get("group_id")
+        print(f"generate_playlist group_id: {group_id}")
+
+        if not group_id:
+            print(f"Missing group_id in request")
+            return https_fn.Response(
+                json.dumps({"error": "Missing group_id"}),
+                status=400,
+                headers={
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        # Fetch group
+        db = get_db()
+        group_doc = db.collection("groups").document(group_id).get()
+        if not group_doc.exists:
+            return https_fn.Response(
+                json.dumps({"error": "Group not found"}),
+                status=404,
+                headers={
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        group_data = group_doc.to_dict()
+        members = group_data.get("members", [])
+
+        # For now, return a placeholder response
+        # TODO: Implement actual YouTube Music API calls to fetch liked songs
+        # and compute intersection
+        return https_fn.Response(
+            json.dumps(
+                {
+                    "success": True,
+                    "message": "Playlist generation started",
+                    "group_id": group_id,
+                    "member_count": len(members),
+                    "intersection_count": 0,
+                }
+            ),
+            status=200,
+            headers={
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+    except https_fn.HttpsError as e:
+        return https_fn.Response(
+            json.dumps({"error": e.message}),
+            status=401 if e.code == "unauthenticated" else 500,
+            headers={
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+    except Exception as e:
+        print(f"Error in generate_playlist: {str(e)}")
+        return https_fn.Response(
+            json.dumps({"error": str(e)}),
+            status=500,
+            headers={
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
