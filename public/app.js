@@ -50,6 +50,31 @@ async function callFunction(functionName, data = {}) {
     }
 }
 
+// Helper to get Google OAuth access token (reuse cached token or reauthenticate)
+async function getGoogleAccessToken(forceReauth = false) {
+    if (!auth.currentUser) throw new Error('User not authenticated');
+
+    if (!forceReauth) {
+        const cached = window.googleAccessToken || sessionStorage.getItem('googleAccessToken');
+        if (cached) return cached;
+    }
+
+    const provider = new firebase.auth.GoogleAuthProvider();
+    provider.addScope('https://www.googleapis.com/auth/youtube.readonly');
+    provider.addScope('https://www.googleapis.com/auth/youtube');
+
+    const result = await auth.currentUser.reauthenticateWithPopup(provider);
+    const token = result && result.credential && result.credential.accessToken;
+    if (token) {
+        window.googleAccessToken = token;
+        try {
+            sessionStorage.setItem('googleAccessToken', token);
+            sessionStorage.setItem('googleAccessTokenObtainedAt', Date.now().toString());
+        } catch (e) { }
+    }
+    return token;
+}
+
 // If running locally, connect to emulators
 // Uncomment these lines when testing locally:
 // auth.useEmulator("http://localhost:9099");
@@ -96,8 +121,9 @@ auth.onAuthStateChanged(async (user) => {
 
         updateConnectionUI();
 
-        // Load user's groups
+        // Load user's groups and profile
         await loadUserGroups();
+        await loadProfile();
     } else {
         currentUser = null;
         userInfo.style.display = 'none';
@@ -113,7 +139,15 @@ signInBtn.addEventListener('click', async () => {
         // Request both read and write access to YouTube
         provider.addScope('https://www.googleapis.com/auth/youtube.readonly');
         provider.addScope('https://www.googleapis.com/auth/youtube');
-        await auth.signInWithPopup(provider);
+        // Use the sign-in result to capture the Google OAuth access token
+        const result = await auth.signInWithPopup(provider);
+        const credential = result.credential;
+        if (credential && credential.accessToken) {
+            // Cache token in sessionStorage (short-lived)
+            const at = credential.accessToken;
+            window.googleAccessToken = at;
+            try { sessionStorage.setItem('googleAccessToken', at); sessionStorage.setItem('googleAccessTokenObtainedAt', Date.now().toString()); } catch (e) { }
+        }
     } catch (error) {
         console.error('Sign in error:', error);
         alert('Failed to sign in. Please try again.');
@@ -128,6 +162,143 @@ signOutBtn.addEventListener('click', async () => {
         console.error('Sign out error:', error);
     }
 });
+
+// Sync Liked Songs
+document.getElementById('syncLikedSongsBtn').addEventListener('click', async () => {
+    try {
+        const syncStatusDiv = document.getElementById('syncStatus');
+        const syncStatusText = document.getElementById('syncStatusText');
+        const syncInlineSpinner = document.getElementById('syncInlineSpinner');
+        const syncInfoDiv = document.getElementById('syncInfo');
+
+        // Show inline spinner (instead of full-page loader) while fetching
+        syncInlineSpinner.style.display = 'inline-block';
+        syncInfoDiv.style.opacity = '0.6';
+
+        // Display sync status
+        syncStatusDiv.style.display = 'block';
+        syncStatusText.className = 'status-badge';
+
+        // Get access token (prefer cached; reauth only if necessary)
+        let accessToken = await getGoogleAccessToken(false);
+        if (accessToken) {
+            syncStatusText.textContent = 'Using cached authentication token';
+        } else {
+            syncStatusText.textContent = '⏳ Re-authenticating to get fresh token...';
+            accessToken = await getGoogleAccessToken(true);
+        }
+
+        // Fetch liked videos via YouTube Data API (client-side)
+        syncStatusText.textContent = '⏳ Fetching liked videos from YouTube...';
+        let videoIds = [];
+        let nextPageToken = null;
+
+        do {
+            const url = new URL('https://www.googleapis.com/youtube/v3/videos');
+            url.searchParams.set('part', 'id');
+            url.searchParams.set('myRating', 'like');
+            url.searchParams.set('maxResults', '50');
+            if (nextPageToken) url.searchParams.set('pageToken', nextPageToken);
+
+            // Attempt fetch, with one retry if token is invalid/expired
+            let resp = await fetch(url.toString(), {
+                headers: { 'Authorization': `Bearer ${accessToken}` }
+            });
+
+            if (!resp.ok && (resp.status === 401 || resp.status === 403)) {
+                // Try reauth once to get a fresh token, then retry
+                syncStatusText.textContent = '⏳ Token expired — reauthenticating...';
+                try {
+                    const newToken = await getGoogleAccessToken(true);
+                    if (newToken) {
+                        // retry the request once
+                        resp = await fetch(url.toString(), { headers: { 'Authorization': `Bearer ${newToken}` } });
+                    }
+                } catch (reauthErr) {
+                    // ignore and fall through to error handling below
+                    console.warn('Reauth failed during retry:', reauthErr);
+                }
+            }
+
+            if (!resp.ok) {
+                const txt = await resp.text();
+                throw new Error(`YouTube API error: ${resp.status} ${txt}`);
+            }
+
+            const data = await resp.json();
+            if (data.items && data.items.length) {
+                videoIds.push(...data.items.map(i => i.id));
+            }
+            nextPageToken = data.nextPageToken;
+        } while (nextPageToken);
+
+        // Send the collected IDs to backend to store in Firestore
+        const syncResult = await callFunction('sync_liked_songs', { liked_song_ids: videoIds });
+
+        // Update inline info and show success
+        await loadProfile();
+        syncStatusText.textContent = `✓ Synced ${syncResult.count} liked songs!`;
+        syncStatusText.className = 'status-badge success';
+
+        // Hide inline spinner
+        syncInlineSpinner.style.display = 'none';
+        syncInfoDiv.style.opacity = '1';
+
+        // Keep the success message visible briefly, then hide
+        setTimeout(() => {
+            syncStatusDiv.style.display = 'none';
+        }, 3000);
+    } catch (error) {
+        console.error('Error syncing liked songs:', error);
+
+        const syncStatusDiv = document.getElementById('syncStatus');
+        const syncStatusText = document.getElementById('syncStatusText');
+        const syncInlineSpinner = document.getElementById('syncInlineSpinner');
+        const syncInfoDiv = document.getElementById('syncInfo');
+
+        syncInlineSpinner.style.display = 'none';
+        syncInfoDiv.style.opacity = '1';
+
+        syncStatusDiv.style.display = 'block';
+        syncStatusText.textContent = `✗ Failed to sync: ${error.message}`;
+        syncStatusText.className = 'status-badge error';
+
+        // Keep error visible longer
+        setTimeout(() => {
+            syncStatusDiv.style.display = 'none';
+        }, 5000);
+    }
+});
+
+// Load current user's profile (sync metadata)
+async function loadProfile() {
+    try {
+        const syncInlineSpinner = document.getElementById('syncInlineSpinner');
+        const syncLastEl = document.getElementById('syncLast');
+        const syncCountEl = document.getElementById('syncCount');
+
+        // show inline loading state
+        if (syncInlineSpinner) syncInlineSpinner.style.display = 'inline-block';
+        if (syncLastEl) syncLastEl.textContent = 'Last synced: Loading...';
+        if (syncCountEl) syncCountEl.textContent = '...';
+
+        const profile = await callFunction('get_profile');
+        const last = profile.liked_songs_synced_at ? new Date(profile.liked_songs_synced_at).toLocaleString() : 'Not synced';
+        const count = profile.liked_songs_count || 0;
+
+        if (syncLastEl) syncLastEl.textContent = `Last synced: ${last}`;
+        if (syncCountEl) syncCountEl.textContent = `${count} song${count !== 1 ? 's' : ''}`;
+        if (syncInlineSpinner) syncInlineSpinner.style.display = 'none';
+    } catch (err) {
+        console.error('Error loading profile:', err);
+        const syncLastEl = document.getElementById('syncLast');
+        const syncCountEl = document.getElementById('syncCount');
+        const syncInlineSpinner = document.getElementById('syncInlineSpinner');
+        if (syncInlineSpinner) syncInlineSpinner.style.display = 'none';
+        if (syncLastEl) syncLastEl.textContent = 'Last synced: Error';
+        if (syncCountEl) syncCountEl.textContent = '0 songs';
+    }
+}
 
 // Check YouTube Music Connection
 async function checkYTMusicConnection() {
@@ -289,15 +460,23 @@ function openGroupDetail(groupId) {
     document.getElementById('groupIdCopy').value = groupId;
     document.getElementById('memberCount').textContent = group.member_count;
 
-    // Display members list
+    // Display members list with last-synced indicator
     const membersList = document.getElementById('membersList');
     if (group.members && group.members.length > 0) {
-        membersList.innerHTML = group.members.map(member => `
+        membersList.innerHTML = group.members.map(member => {
+            const lastSynced = member.liked_songs_synced_at
+                ? new Date(member.liked_songs_synced_at).toLocaleString()
+                : 'Not synced';
+
+            const count = member.liked_songs_count || 0;
+            return `
             <div class="member-item">
                 <p><strong>${escapeHtml(member.display_name)}</strong></p>
                 <p style="color: #666; font-size: 0.9em;">${escapeHtml(member.email)}</p>
+                <p class="member-meta">Last synced: ${escapeHtml(lastSynced)} • ${count} song${count !== 1 ? 's' : ''}</p>
             </div>
-        `).join('');
+        `;
+        }).join('');
     } else {
         membersList.innerHTML = '<p class="empty-state">No members found</p>';
     }

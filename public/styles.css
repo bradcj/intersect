@@ -211,6 +211,11 @@ button {
     color: #065f46;
 }
 
+.status-badge.error {
+    background: #fee2e2;
+    color: #7f1d1d;
+}
+
 /* Groups List */
 .groups-list {
     display: grid;
@@ -429,6 +434,12 @@ label {
     color: var(--text-primary);
 }
 
+.member-meta {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-top: 8px;
+}
+
 .success-message {
     background: #d1fae5;
     border: 1px solid #6ee7b7;
@@ -463,6 +474,12 @@ label {
     border-top-color: var(--primary-color);
     border-radius: 50%;
     animation: spin 1s linear infinite;
+}
+
+.spinner.inline {
+    width: 18px;
+    height: 18px;
+    border-width: 3px;
 }
 
 @keyframes spin {

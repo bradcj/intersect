@@ -96,6 +96,48 @@
                         </div>
                     </div>
 
+                    <!-- Sync Liked Songs Section -->
+                    <div class="card">
+                        <h3>Sync Your Music</h3>
+                        <p>
+                            Cache your liked songs to enable faster playlist
+                            generation
+                        </p>
+                        <div
+                            style="
+                                display: flex;
+                                align-items: center;
+                                gap: 12px;
+                            "
+                        >
+                            <button id="syncLikedSongsBtn" class="btn-primary">
+                                🔄 Sync Liked Songs
+                            </button>
+                            <div id="syncInlineSpinner" style="display: none">
+                                <div class="spinner inline"></div>
+                            </div>
+                        </div>
+
+                        <div
+                            id="syncInfo"
+                            style="
+                                margin-top: 12px;
+                                color: var(--text-secondary);
+                            "
+                        >
+                            <span id="syncLast">Last synced: —</span>
+                            <span style="margin: 0 8px">•</span>
+                            <span id="syncCount">0 songs</span>
+                        </div>
+
+                        <div
+                            id="syncStatus"
+                            style="margin-top: 12px; display: none"
+                        >
+                            <p id="syncStatusText" class="status-badge"></p>
+                        </div>
+                    </div>
+
                     <!-- Groups Section -->
                     <div class="card">
                         <div class="card-header">

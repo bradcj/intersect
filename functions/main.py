@@ -15,7 +15,8 @@ from firebase_functions import https_fn, options
 from google.cloud.firestore_v1.base_query import FieldFilter
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
+from google.auth.transport.requests import Request
+from ytmusicapi import YTMusic
 
 # OAuth Configuration
 SCOPES = [
@@ -267,23 +268,73 @@ def get_user_groups(req: https_fn.Request) -> https_fn.Response:
             for member_id in group_data.get("members", []):
                 try:
                     user_record = admin_auth.get_user(member_id)
+
+                    # Try to fetch cached sync metadata from Firestore users collection
+                    user_doc = db.collection("users").document(member_id).get()
+                    user_data = user_doc.to_dict() if user_doc.exists else {}
+
+                    liked_synced_at = None
+                    if user_data.get("liked_songs_synced_at"):
+                        try:
+                            liked_synced_at = user_data.get(
+                                "liked_songs_synced_at"
+                            ).isoformat()
+                        except Exception:
+                            liked_synced_at = str(
+                                user_data.get("liked_songs_synced_at")
+                            )
+
                     member_details.append(
                         {
                             "uid": member_id,
                             "email": user_record.email,
                             "display_name": user_record.display_name
                             or user_record.email,
+                            "liked_songs_synced_at": liked_synced_at,
+                            "liked_songs_count": user_data.get("liked_songs_count", 0),
                         }
                     )
                 except Exception as e:
                     print(f"Could not fetch user details for {member_id}: {e}")
-                    member_details.append(
-                        {
-                            "uid": member_id,
-                            "email": "Unknown",
-                            "display_name": "Unknown User",
-                        }
-                    )
+                    # Attempt to still include Firestore sync data if present
+                    try:
+                        user_doc = db.collection("users").document(member_id).get()
+                        user_data = user_doc.to_dict() if user_doc.exists else {}
+                        liked_synced_at = None
+                        if user_data.get("liked_songs_synced_at"):
+                            try:
+                                liked_synced_at = user_data.get(
+                                    "liked_songs_synced_at"
+                                ).isoformat()
+                            except Exception:
+                                liked_synced_at = str(
+                                    user_data.get("liked_songs_synced_at")
+                                )
+
+                        member_details.append(
+                            {
+                                "uid": member_id,
+                                "email": user_data.get("email", "Unknown"),
+                                "display_name": user_data.get(
+                                    "display_name", "Unknown User"
+                                ),
+                                "liked_songs_synced_at": liked_synced_at,
+                                "liked_songs_count": user_data.get(
+                                    "liked_songs_count", 0
+                                ),
+                            }
+                        )
+                    except Exception as e2:
+                        print(f"Fallback: no user data for {member_id}: {e2}")
+                        member_details.append(
+                            {
+                                "uid": member_id,
+                                "email": "Unknown",
+                                "display_name": "Unknown User",
+                                "liked_songs_synced_at": None,
+                                "liked_songs_count": 0,
+                            }
+                        )
 
             groups.append(
                 {
@@ -325,6 +376,80 @@ def get_user_groups(req: https_fn.Request) -> https_fn.Response:
         )
     except Exception as e:
         print(f"Error in get_user_groups: {str(e)}")
+        return https_fn.Response(
+            json.dumps({"error": str(e)}),
+            status=500,
+            headers={
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+
+@https_fn.on_request()
+def get_profile(req: https_fn.Request) -> https_fn.Response:
+    """Return the current user's cached sync metadata (liked songs count and last synced)."""
+    # Handle preflight
+    if req.method == "OPTIONS":
+        return https_fn.Response(
+            "",
+            status=204,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            },
+        )
+
+    try:
+        user_id = verify_auth_token(req)
+        db = get_db()
+        user_doc = db.collection("users").document(user_id).get()
+        if not user_doc.exists:
+            return https_fn.Response(
+                json.dumps({"liked_songs_synced_at": None, "liked_songs_count": 0}),
+                status=200,
+                headers={
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        user_data = user_doc.to_dict()
+        liked_songs_count = user_data.get("liked_songs_count", 0)
+        liked_songs_synced_at = user_data.get("liked_songs_synced_at")
+        liked_songs_synced_at_iso = None
+        if liked_songs_synced_at:
+            try:
+                liked_songs_synced_at_iso = liked_songs_synced_at.isoformat()
+            except Exception:
+                liked_songs_synced_at_iso = str(liked_songs_synced_at)
+
+        return https_fn.Response(
+            json.dumps(
+                {
+                    "liked_songs_synced_at": liked_songs_synced_at_iso,
+                    "liked_songs_count": liked_songs_count,
+                }
+            ),
+            status=200,
+            headers={
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+    except https_fn.HttpsError as e:
+        return https_fn.Response(
+            json.dumps({"error": e.message}),
+            status=401 if e.code == "unauthenticated" else 500,
+            headers={
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+    except Exception as e:
+        print(f"Error in get_profile: {e}")
         return https_fn.Response(
             json.dumps({"error": str(e)}),
             status=500,
@@ -525,17 +650,217 @@ def generate_playlist(req: https_fn.Request) -> https_fn.Response:
         group_data = group_doc.to_dict()
         members = group_data.get("members", [])
 
-        # For now, return a placeholder response
-        # TODO: Implement actual YouTube Music API calls to fetch liked songs
-        # and compute intersection
+        # Rate limiting: prevent playlist generation more than once per hour per group
+        last_updated = group_data.get("last_updated")
+        if last_updated:
+            time_since_last = datetime.now() - last_updated.replace(tzinfo=None)
+            if time_since_last.total_seconds() < 3600:  # 1 hour
+                return https_fn.Response(
+                    json.dumps(
+                        {
+                            "error": "Playlist was recently generated. Please wait before generating again.",
+                            "cooldown_seconds": int(
+                                3600 - time_since_last.total_seconds()
+                            ),
+                        }
+                    ),
+                    status=429,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Access-Control-Allow-Origin": "*",
+                    },
+                )
+
+        if not members or user_id not in members:
+            return https_fn.Response(
+                json.dumps({"error": "User is not a member of this group"}),
+                status=403,
+                headers={
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        # Fetch cached liked songs for each member
+        all_member_liked_songs = {}
+        db = get_db()
+        members_missing_sync = []
+
+        for member_id in members:
+            try:
+                # Get cached liked songs for this member
+                user_doc = db.collection("users").document(member_id).get()
+                if not user_doc.exists:
+                    print(f"User document not found for member {member_id}")
+                    members_missing_sync.append(member_id)
+                    continue
+
+                user_data = user_doc.to_dict()
+
+                # Get cached liked songs
+                liked_song_ids = user_data.get("liked_song_ids", [])
+                synced_at = user_data.get("liked_songs_synced_at")
+
+                if not liked_song_ids:
+                    print(f"Member {member_id} has no synced liked songs")
+                    members_missing_sync.append(member_id)
+                    continue
+
+                all_member_liked_songs[member_id] = set(liked_song_ids)
+                print(
+                    f"Member {member_id} has {len(liked_song_ids)} cached liked songs (synced at {synced_at})"
+                )
+
+            except Exception as e:
+                print(
+                    f"Error reading cached liked songs for member {member_id}: {str(e)}"
+                )
+                members_missing_sync.append(member_id)
+                continue
+
+        if not all_member_liked_songs:
+            return https_fn.Response(
+                json.dumps({"error": "Could not fetch liked songs from any member"}),
+                status=400,
+                headers={
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        # Check if any members are missing synced songs
+        if members_missing_sync:
+            missing_names = []
+            for member_id in members_missing_sync:
+                try:
+                    user = admin_auth.get_user(member_id)
+                    missing_names.append(user.display_name or user.email)
+                except:
+                    missing_names.append(member_id[:10])  # Fallback to shortened UID
+
+            return https_fn.Response(
+                json.dumps(
+                    {
+                        "error": f"Cannot generate playlist: The following members haven't synced their liked songs: {', '.join(missing_names)}. Please ask them to click 'Sync Liked Songs' first.",
+                        "missing_members": members_missing_sync,
+                    }
+                ),
+                status=400,
+                headers={
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        # Compute intersection of liked songs
+        intersection_video_ids = None
+        for video_ids in all_member_liked_songs.values():
+            if intersection_video_ids is None:
+                intersection_video_ids = video_ids.copy()
+            else:
+                intersection_video_ids = intersection_video_ids.intersection(video_ids)
+
+        intersection_count = (
+            len(intersection_video_ids) if intersection_video_ids else 0
+        )
+        print(f"Intersection has {intersection_count} songs")
+
+        # Create a new playlist in the requesting user's account
+        try:
+            # Get current user's credentials
+            current_user_doc = db.collection("users").document(user_id).get()
+            if not current_user_doc.exists:
+                return https_fn.Response(
+                    json.dumps({"error": "User credentials not found. Please connect your YouTube Music account first."}),
+                    status=400,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Access-Control-Allow-Origin": "*",
+                    },
+                )
+
+            current_user_data = current_user_doc.to_dict()
+            
+            # Check if user has OAuth credentials
+            refresh_token = current_user_data.get("refresh_token")
+            if not refresh_token:
+                return https_fn.Response(
+                    json.dumps(
+                        {"error": "YouTube Music not connected. Please connect your account first."}
+                    ),
+                    status=400,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Access-Control-Allow-Origin": "*",
+                    },
+                )
+            
+            # Get fresh access token using refresh token
+            creds = Credentials(
+                token=current_user_data.get("token"),
+                refresh_token=refresh_token,
+                token_uri=current_user_data.get("token_uri"),
+                client_id=current_user_data.get("client_id"),
+                client_secret=current_user_data.get("client_secret"),
+                scopes=current_user_data.get("scopes")
+            )
+            
+            # Refresh the token if expired
+            if not creds.valid:
+                from google.auth.transport.requests import Request
+                creds.refresh(Request())
+                
+                # Update stored token
+                db.collection("users").document(user_id).update({
+                    "token": creds.token,
+                    "updated_at": firestore.SERVER_TIMESTAMP
+                })
+            
+            # Initialize YTMusic with the access token
+            yt = YTMusic(auth=creds.token)
+
+            # Create new playlist
+            playlist_name = f"{group_data['name']} - Intersection"
+            playlist_id = yt.create_playlist(
+                title=playlist_name,
+                description=f"Intersection playlist for group: {group_data['name']}",
+            )
+            print(f"Created playlist {playlist_id}")
+
+            # Add intersection songs to the playlist (limit to 500 songs)
+            if intersection_video_ids:
+                song_list = list(intersection_video_ids)
+                max_songs = 500
+                if len(song_list) > max_songs:
+                    print(
+                        f"Limiting playlist to {max_songs} songs (found {len(song_list)})"
+                    )
+                    song_list = song_list[:max_songs]
+
+                yt.add_playlist_items(playlist_id, song_list)
+                print(f"Added {len(song_list)} songs to playlist")
+
+            # Store playlist ID in group document
+            db.collection("groups").document(group_id).update(
+                {
+                    "playlist_id": playlist_id,
+                    "last_updated": firestore.SERVER_TIMESTAMP,
+                }
+            )
+
+        except Exception as e:
+            print(f"Error creating playlist: {str(e)}")
+            # Still return success with intersection count even if playlist creation fails
+
+        # Return success response
         return https_fn.Response(
             json.dumps(
                 {
                     "success": True,
-                    "message": "Playlist generation started",
+                    "message": "Playlist generation completed",
                     "group_id": group_id,
-                    "member_count": len(members),
-                    "intersection_count": 0,
+                    "member_count": len(all_member_liked_songs),
+                    "intersection_count": intersection_count,
                 }
             ),
             status=200,
@@ -556,6 +881,99 @@ def generate_playlist(req: https_fn.Request) -> https_fn.Response:
         )
     except Exception as e:
         print(f"Error in generate_playlist: {str(e)}")
+        return https_fn.Response(
+            json.dumps({"error": str(e)}),
+            status=500,
+            headers={
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+
+@https_fn.on_request()
+def sync_liked_songs(req: https_fn.Request) -> https_fn.Response:
+    """Sync user's liked songs from YouTube Music and cache them"""
+    # Handle preflight
+    if req.method == "OPTIONS":
+        return https_fn.Response(
+            "",
+            status=204,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            },
+        )
+    try:
+        # Verify authentication
+        user_id = verify_auth_token(req)
+        print(f"sync_liked_songs called by user: {user_id}")
+
+        data = req.get_json() or {}
+
+        # If client supplies liked_song_ids directly, store them (preferred)
+        liked_song_ids = data.get("liked_song_ids")
+        if liked_song_ids is None:
+            return https_fn.Response(
+                json.dumps(
+                    {
+                        "error": "No liked_song_ids provided. Client should send liked_song_ids."
+                    }
+                ),
+                status=400,
+                headers={
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        if not isinstance(liked_song_ids, list):
+            return https_fn.Response(
+                json.dumps({"error": "liked_song_ids must be an array of video IDs."}),
+                status=400,
+                headers={
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        db = get_db()
+        db.collection("users").document(user_id).set(
+            {
+                "liked_song_ids": liked_song_ids,
+                "liked_songs_synced_at": firestore.SERVER_TIMESTAMP,
+                "liked_songs_count": len(liked_song_ids),
+            },
+            merge=True,
+        )
+
+        return https_fn.Response(
+            json.dumps(
+                {
+                    "success": True,
+                    "message": f"Synced {len(liked_song_ids)} liked songs",
+                    "count": len(liked_song_ids),
+                }
+            ),
+            status=200,
+            headers={
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+    except https_fn.HttpsError as e:
+        return https_fn.Response(
+            json.dumps({"error": e.message}),
+            status=401 if e.code == "unauthenticated" else 500,
+            headers={
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+    except Exception as e:
+        print(f"Error in sync_liked_songs: {str(e)}")
         return https_fn.Response(
             json.dumps({"error": str(e)}),
             status=500,
