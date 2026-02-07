@@ -84,6 +84,8 @@ async function getGoogleAccessToken(forceReauth = false) {
 let currentUser = null;
 let currentGroups = [];
 let isYTMusicConnected = false;
+let pendingIntersectionPreview = null;
+
 
 // DOM Elements
 const landingPage = document.getElementById('landingPage');
@@ -459,6 +461,13 @@ function openGroupDetail(groupId) {
     document.getElementById('groupIdDisplay').textContent = groupId;
     document.getElementById('groupIdCopy').value = groupId;
     document.getElementById('memberCount').textContent = group.member_count;
+    if (group.playlist_id != null) {
+        const playlistLink = `https://www.youtube.com/playlist?list=${group.playlist_id}`;
+        document.getElementById('currentPlaylistCount').textContent = `Playlist contains ${group.playlist_song_count || 0} songs`;
+        document.getElementById('currentPlaylistLink').href = playlistLink;
+        document.getElementById('currentPlaylistLastUpdated').textContent = `Last updated: ${group.last_updated ? new Date(group.last_updated).toLocaleString() : 'N/A'}`;
+        document.getElementById('playlistDetailsSection').style.display = 'block';
+    }
 
     // Display members list with last-synced indicator
     const membersList = document.getElementById('membersList');
@@ -508,31 +517,103 @@ document.getElementById('copyGroupIdBtn').addEventListener('click', () => {
 document.getElementById('generatePlaylistBtn').addEventListener('click', async () => {
     const groupId = groupDetailModal.dataset.groupId;
 
-    if (!isYTMusicConnected) {
-        alert('Please connect your YouTube Music account first!');
-        return;
-    }
-
     try {
         showLoading();
-        const result = await callFunction('generate_playlist', { group_id: groupId });
+
+        const preview = await callFunction('preview_intersection', {
+            group_id: groupId
+        });
 
         hideLoading();
+
+        // Case: 0 songs in common
+        if (preview.intersection_count === 0) {
+            alert('No songs were found in common between group members.');
+            return;
+        }
+
+        // Store preview state
+        pendingIntersectionPreview = {
+            groupId,
+            previewId: preview.preview_id,
+            songIds: preview.intersection_ids,
+            count: preview.intersection_count
+        };
+
+        // Close group detail modal
+        closeModal(groupDetailModal);
+
+        // Populate preview modal
+        const textEl = document.getElementById('intersectionPreviewText');
+        textEl.textContent =
+            `We found ${preview.intersection_count} songs liked by all members.\n\n` +
+            `Would you like to create this playlist in your YouTube Music account?`;
+
+        // Open confirmation modal
+        openModal(document.getElementById('intersectionPreviewModal'));
+
+    } catch (error) {
+        hideLoading();
+        alert(error.message || 'Failed to preview intersection');
+    }
+});
+
+document.getElementById('confirmIntersectionPreviewBtn').addEventListener('click', async () => {
+    if (!pendingIntersectionPreview) return;
+
+    const { groupId, count, songIds } = pendingIntersectionPreview;
+
+    try {
+        closeModal(document.getElementById('intersectionPreviewModal'));
+        showLoading();
+
+        const playlistId = await createYouTubePlaylist(
+            'Intersection Playlist',
+            `Songs liked by all group members`
+        );
+
+        await addVideosToPlaylist(playlistId, songIds);
+
+        await callFunction('update_group_playlist', {
+            group_id: groupId,
+            playlist_id: playlistId,
+            playlist_song_count: count
+        });
+
+
+        hideLoading();
+
+        pendingIntersectionPreview = null;
+
+        // Reopen group detail modal
+        openGroupDetail(groupId);
 
         const resultDiv = document.getElementById('playlistResult');
         resultDiv.style.display = 'block';
         resultDiv.innerHTML = `
             <div class="success-message">
-                <p>✓ ${result.message}</p>
-                <p>Found ${result.intersection_count} songs in common</p>
+                <p>✓ Playlist created successfully</p>
+                <p>${count} songs added</p>
+                <a href="https://www.youtube.com/playlist?list=${playlistId}" target="_blank" class="playlist-link">View Playlist on YouTube</a>
             </div>
         `;
     } catch (error) {
-        console.error('Error generating playlist:', error);
-        alert('Failed to generate playlist. Make sure all members have connected their YouTube Music accounts.');
         hideLoading();
+        alert(error.message || 'Failed to create playlist');
     }
 });
+
+document.getElementById('cancelIntersectionPreviewBtn').addEventListener('click', () => {
+    pendingIntersectionPreview = null;
+    closeModal(document.getElementById('intersectionPreviewModal'));
+});
+
+document.getElementById('closeIntersectionPreviewModal').addEventListener('click', () => {
+    pendingIntersectionPreview = null;
+    closeModal(document.getElementById('intersectionPreviewModal'));
+});
+
+
 
 // Modal Utilities
 function openModal(modal) {
@@ -546,13 +627,18 @@ function closeModal(modal) {
 }
 
 // Close modals when clicking outside
-[createGroupModal, groupDetailModal, joinGroupModal].forEach(modal => {
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-            closeModal(modal);
-        }
+[createGroupModal, groupDetailModal, joinGroupModal, intersectionPreviewModal]
+    .forEach(modal => {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                closeModal(modal);
+                if (modal.id === 'intersectionPreviewModal') {
+                    pendingIntersectionPreview = null;
+                }
+            }
+        });
     });
-});
+
 
 // Loading Overlay
 function showLoading() {
@@ -568,4 +654,77 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+async function createYouTubePlaylist(title, description) {
+    let accessToken = await getGoogleAccessToken(false);
+    const resultDiv = document.getElementById('playlistResult');
+    if (accessToken) {
+        resultDiv.innerHTML = '<p>Using cached authentication token</p>';
+    } else {
+        resultDiv.innerHTML = '<p>⏳ Re-authenticating to get fresh token...</p>';
+        accessToken = await getGoogleAccessToken(true);
+    }
+    const res = await fetch(
+        'https://www.googleapis.com/youtube/v3/playlists?part=snippet,status',
+        {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                snippet: {
+                    title,
+                    description
+                },
+                status: {
+                    privacyStatus: 'unlisted'
+                }
+            })
+        }
+    );
+
+    if (!res.ok) {
+        throw new Error('Failed to create playlist');
+    }
+
+    const data = await res.json();
+    return data.id;
+}
+
+async function addVideosToPlaylist(playlistId, videoIds) {
+    let accessToken = await getGoogleAccessToken(false);
+    const resultDiv = document.getElementById('playlistResult');
+    if (accessToken) {
+        resultDiv.innerHTML = '<p>Using cached authentication token</p>';
+    } else {
+        resultDiv.innerHTML = '<p>⏳ Re-authenticating to get fresh token...</p>';
+        accessToken = await getGoogleAccessToken(true);
+    }
+    for (const videoId of videoIds) {
+        const res = await fetch(
+            'https://www.googleapis.com/youtube/v3/playlistItems?part=snippet',
+            {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    snippet: {
+                        playlistId,
+                        resourceId: {
+                            kind: 'youtube#video',
+                            videoId
+                        }
+                    }
+                })
+            }
+        );
+
+        if (!res.ok) {
+            console.warn(`Failed to add video ${videoId}`);
+        }
+    }
 }

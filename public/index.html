@@ -209,8 +209,29 @@
                                 <span id="memberCount">0</span>
                             </p>
                         </div>
-
-                        <div class="action-section">
+                        <div
+                            id="playlistDetailsSection"
+                            class="action-section"
+                            style="display: none"
+                        >
+                            <!-- section to display details of the group playlist (if it exists) show the link and number of songs -->
+                            <h4>Current Group Playlist</h4>
+                            <div id="currentPlaylistInfo">
+                                <p id="currentPlaylistCount"></p>
+                                <a
+                                    id="currentPlaylistLink"
+                                    href="#"
+                                    target="_blank"
+                                    class="playlist-link"
+                                    >View Playlist on YouTube</a
+                                >
+                                <p id="currentPlaylistLastUpdated"></p>
+                            </div>
+                        </div>
+                        <div
+                            id="generatePlaylistSection"
+                            class="action-section"
+                        >
                             <h4>Generate Playlist</h4>
                             <p>
                                 Create a playlist with songs that all members
@@ -286,6 +307,38 @@
                 </div>
             </div>
 
+            <!-- Intersection Preview Modal -->
+            <div id="intersectionPreviewModal" class="modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>Confirm Playlist Creation</h3>
+                        <button
+                            class="modal-close"
+                            id="closeIntersectionPreviewModal"
+                        >
+                            &times;
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <p id="intersectionPreviewText"></p>
+                    </div>
+                    <div class="modal-footer">
+                        <button
+                            id="cancelIntersectionPreviewBtn"
+                            class="btn-secondary"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            id="confirmIntersectionPreviewBtn"
+                            class="btn-primary"
+                        >
+                            Create Playlist
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Loading Overlay -->
             <div
                 id="loadingOverlay"
@@ -296,7 +349,6 @@
                 <p>Loading...</p>
             </div>
         </div>
-
         <!-- Firebase SDKs -->
         <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>

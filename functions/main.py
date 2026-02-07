@@ -6,8 +6,9 @@ Using HTTP functions instead of callable functions for better auth reliability
 
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
+import uuid
 
 import firebase_admin
 from firebase_admin import credentials, firestore, auth as admin_auth
@@ -188,6 +189,9 @@ def oauth_callback(req: https_fn.Request) -> https_fn.Response:
 
         credentials = flow.credentials
 
+        print(
+            f"OAuth successful for user {user_id}. Storing credentials: {credentials.to_json()}"
+        )
         # Store credentials in Firestore
         db = get_db()
         db.collection("users").document(user_id).set(
@@ -353,6 +357,8 @@ def get_user_groups(req: https_fn.Request) -> https_fn.Response:
                         if group_data.get("last_updated")
                         else None
                     ),
+                    "playlist_id": group_data.get("playlist_id"),
+                    "playlist_song_count": group_data.get("playlist_song_count", 0),
                 }
             )
 
@@ -596,302 +602,6 @@ def join_group(req: https_fn.Request) -> https_fn.Response:
 
 
 @https_fn.on_request()
-def generate_playlist(req: https_fn.Request) -> https_fn.Response:
-    """Generate intersection playlist for a group"""
-    # Handle preflight
-    if req.method == "OPTIONS":
-        return https_fn.Response(
-            "",
-            status=204,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            },
-        )
-
-    try:
-        # Verify authentication
-        user_id = verify_auth_token(req)
-
-        # Parse request body
-        raw_data = req.get_json()
-        print(f"generate_playlist request data: {raw_data}")
-
-        # Extract from nested 'data' key if present
-        data = raw_data.get("data", raw_data) if raw_data else {}
-        group_id = data.get("group_id")
-        print(f"generate_playlist group_id: {group_id}")
-
-        if not group_id:
-            print(f"Missing group_id in request")
-            return https_fn.Response(
-                json.dumps({"error": "Missing group_id"}),
-                status=400,
-                headers={
-                    "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*",
-                },
-            )
-
-        # Fetch group
-        db = get_db()
-        group_doc = db.collection("groups").document(group_id).get()
-        if not group_doc.exists:
-            return https_fn.Response(
-                json.dumps({"error": "Group not found"}),
-                status=404,
-                headers={
-                    "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*",
-                },
-            )
-
-        group_data = group_doc.to_dict()
-        members = group_data.get("members", [])
-
-        # Rate limiting: prevent playlist generation more than once per hour per group
-        last_updated = group_data.get("last_updated")
-        if last_updated:
-            time_since_last = datetime.now() - last_updated.replace(tzinfo=None)
-            if time_since_last.total_seconds() < 3600:  # 1 hour
-                return https_fn.Response(
-                    json.dumps(
-                        {
-                            "error": "Playlist was recently generated. Please wait before generating again.",
-                            "cooldown_seconds": int(
-                                3600 - time_since_last.total_seconds()
-                            ),
-                        }
-                    ),
-                    status=429,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Access-Control-Allow-Origin": "*",
-                    },
-                )
-
-        if not members or user_id not in members:
-            return https_fn.Response(
-                json.dumps({"error": "User is not a member of this group"}),
-                status=403,
-                headers={
-                    "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*",
-                },
-            )
-
-        # Fetch cached liked songs for each member
-        all_member_liked_songs = {}
-        db = get_db()
-        members_missing_sync = []
-
-        for member_id in members:
-            try:
-                # Get cached liked songs for this member
-                user_doc = db.collection("users").document(member_id).get()
-                if not user_doc.exists:
-                    print(f"User document not found for member {member_id}")
-                    members_missing_sync.append(member_id)
-                    continue
-
-                user_data = user_doc.to_dict()
-
-                # Get cached liked songs
-                liked_song_ids = user_data.get("liked_song_ids", [])
-                synced_at = user_data.get("liked_songs_synced_at")
-
-                if not liked_song_ids:
-                    print(f"Member {member_id} has no synced liked songs")
-                    members_missing_sync.append(member_id)
-                    continue
-
-                all_member_liked_songs[member_id] = set(liked_song_ids)
-                print(
-                    f"Member {member_id} has {len(liked_song_ids)} cached liked songs (synced at {synced_at})"
-                )
-
-            except Exception as e:
-                print(
-                    f"Error reading cached liked songs for member {member_id}: {str(e)}"
-                )
-                members_missing_sync.append(member_id)
-                continue
-
-        if not all_member_liked_songs:
-            return https_fn.Response(
-                json.dumps({"error": "Could not fetch liked songs from any member"}),
-                status=400,
-                headers={
-                    "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*",
-                },
-            )
-
-        # Check if any members are missing synced songs
-        if members_missing_sync:
-            missing_names = []
-            for member_id in members_missing_sync:
-                try:
-                    user = admin_auth.get_user(member_id)
-                    missing_names.append(user.display_name or user.email)
-                except:
-                    missing_names.append(member_id[:10])  # Fallback to shortened UID
-
-            return https_fn.Response(
-                json.dumps(
-                    {
-                        "error": f"Cannot generate playlist: The following members haven't synced their liked songs: {', '.join(missing_names)}. Please ask them to click 'Sync Liked Songs' first.",
-                        "missing_members": members_missing_sync,
-                    }
-                ),
-                status=400,
-                headers={
-                    "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*",
-                },
-            )
-
-        # Compute intersection of liked songs
-        intersection_video_ids = None
-        for video_ids in all_member_liked_songs.values():
-            if intersection_video_ids is None:
-                intersection_video_ids = video_ids.copy()
-            else:
-                intersection_video_ids = intersection_video_ids.intersection(video_ids)
-
-        intersection_count = (
-            len(intersection_video_ids) if intersection_video_ids else 0
-        )
-        print(f"Intersection has {intersection_count} songs")
-
-        # Create a new playlist in the requesting user's account
-        try:
-            # Get current user's credentials
-            current_user_doc = db.collection("users").document(user_id).get()
-            if not current_user_doc.exists:
-                return https_fn.Response(
-                    json.dumps({"error": "User credentials not found. Please connect your YouTube Music account first."}),
-                    status=400,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Access-Control-Allow-Origin": "*",
-                    },
-                )
-
-            current_user_data = current_user_doc.to_dict()
-            
-            # Check if user has OAuth credentials
-            refresh_token = current_user_data.get("refresh_token")
-            if not refresh_token:
-                return https_fn.Response(
-                    json.dumps(
-                        {"error": "YouTube Music not connected. Please connect your account first."}
-                    ),
-                    status=400,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Access-Control-Allow-Origin": "*",
-                    },
-                )
-            
-            # Get fresh access token using refresh token
-            creds = Credentials(
-                token=current_user_data.get("token"),
-                refresh_token=refresh_token,
-                token_uri=current_user_data.get("token_uri"),
-                client_id=current_user_data.get("client_id"),
-                client_secret=current_user_data.get("client_secret"),
-                scopes=current_user_data.get("scopes")
-            )
-            
-            # Refresh the token if expired
-            if not creds.valid:
-                from google.auth.transport.requests import Request
-                creds.refresh(Request())
-                
-                # Update stored token
-                db.collection("users").document(user_id).update({
-                    "token": creds.token,
-                    "updated_at": firestore.SERVER_TIMESTAMP
-                })
-            
-            # Initialize YTMusic with the access token
-            yt = YTMusic(auth=creds.token)
-
-            # Create new playlist
-            playlist_name = f"{group_data['name']} - Intersection"
-            playlist_id = yt.create_playlist(
-                title=playlist_name,
-                description=f"Intersection playlist for group: {group_data['name']}",
-            )
-            print(f"Created playlist {playlist_id}")
-
-            # Add intersection songs to the playlist (limit to 500 songs)
-            if intersection_video_ids:
-                song_list = list(intersection_video_ids)
-                max_songs = 500
-                if len(song_list) > max_songs:
-                    print(
-                        f"Limiting playlist to {max_songs} songs (found {len(song_list)})"
-                    )
-                    song_list = song_list[:max_songs]
-
-                yt.add_playlist_items(playlist_id, song_list)
-                print(f"Added {len(song_list)} songs to playlist")
-
-            # Store playlist ID in group document
-            db.collection("groups").document(group_id).update(
-                {
-                    "playlist_id": playlist_id,
-                    "last_updated": firestore.SERVER_TIMESTAMP,
-                }
-            )
-
-        except Exception as e:
-            print(f"Error creating playlist: {str(e)}")
-            # Still return success with intersection count even if playlist creation fails
-
-        # Return success response
-        return https_fn.Response(
-            json.dumps(
-                {
-                    "success": True,
-                    "message": "Playlist generation completed",
-                    "group_id": group_id,
-                    "member_count": len(all_member_liked_songs),
-                    "intersection_count": intersection_count,
-                }
-            ),
-            status=200,
-            headers={
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*",
-            },
-        )
-
-    except https_fn.HttpsError as e:
-        return https_fn.Response(
-            json.dumps({"error": e.message}),
-            status=401 if e.code == "unauthenticated" else 500,
-            headers={
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*",
-            },
-        )
-    except Exception as e:
-        print(f"Error in generate_playlist: {str(e)}")
-        return https_fn.Response(
-            json.dumps({"error": str(e)}),
-            status=500,
-            headers={
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*",
-            },
-        )
-
-
-@https_fn.on_request()
 def sync_liked_songs(req: https_fn.Request) -> https_fn.Response:
     """Sync user's liked songs from YouTube Music and cache them"""
     # Handle preflight
@@ -981,4 +691,203 @@ def sync_liked_songs(req: https_fn.Request) -> https_fn.Response:
                 "Content-Type": "application/json",
                 "Access-Control-Allow-Origin": "*",
             },
+        )
+
+
+@https_fn.on_request()
+def preview_intersection(req: https_fn.Request) -> https_fn.Response:
+    if req.method == "OPTIONS":
+        return https_fn.Response(
+            "",
+            status=204,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            },
+        )
+
+    try:
+        user_id = verify_auth_token(req)
+        data = req.get_json() or {}
+        group_id = data.get("group_id")
+
+        if not group_id:
+            return https_fn.Response(
+                json.dumps({"error": "Missing group_id"}),
+                status=400,
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+        db = get_db()
+        group_doc = db.collection("groups").document(group_id).get()
+        if not group_doc.exists:
+            return https_fn.Response(
+                json.dumps({"error": "Group not found"}),
+                status=404,
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+        group = group_doc.to_dict()
+        members = group.get("members", [])
+
+        if user_id not in members:
+            return https_fn.Response(
+                json.dumps({"error": "User not a group member"}),
+                status=403,
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+        all_sets = {}
+        missing = []
+
+        for uid in members:
+            doc = db.collection("users").document(uid).get()
+            if not doc.exists:
+                missing.append(uid)
+                continue
+
+            data = doc.to_dict()
+            ids = data.get("liked_song_ids", [])
+            if not ids:
+                missing.append(uid)
+                continue
+
+            all_sets[uid] = set(ids)
+
+        if missing:
+            return https_fn.Response(
+                json.dumps(
+                    {
+                        "error": "Some members have not synced liked songs",
+                        "missing_members": missing,
+                    }
+                ),
+                status=400,
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+        intersection = None
+        for s in all_sets.values():
+            intersection = s if intersection is None else intersection & s
+
+        intersection_ids = list(intersection or [])
+
+        if len(intersection_ids) == 0:
+            return https_fn.Response(
+                json.dumps(
+                    {"intersection_count": 0, "error": "No songs found in common"}
+                ),
+                status=200,
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+        preview_id = f"prev_{uuid.uuid4().hex[:8]}"
+        now = datetime.now(timezone.utc)
+
+        preview_ref = (
+            db.collection("groups")
+            .document(group_id)
+            .collection("previews")
+            .document(preview_id)
+        )
+
+        preview_ref.set(
+            {
+                "intersection_ids": intersection_ids,
+                "member_ids": members,
+                "created_at": now,
+                "expires_at": now + timedelta(minutes=10),
+                "created_by": user_id,
+            }
+        )
+
+        return https_fn.Response(
+            json.dumps(
+                {
+                    "preview_id": preview_id,
+                    "intersection_count": len(intersection_ids),
+                    "intersection_ids": intersection_ids,
+                    "member_count": len(members),
+                }
+            ),
+            status=200,
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
+    except Exception as e:
+        print(f"preview_intersection error: {e}")
+        return https_fn.Response(
+            json.dumps({"error": str(e)}),
+            status=500,
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
+
+@https_fn.on_request()
+def update_group_playlist(req: https_fn.Request) -> https_fn.Response:
+    if req.method == "OPTIONS":
+        return https_fn.Response(
+            "",
+            status=204,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            },
+        )
+
+    try:
+        user_id = verify_auth_token(req)
+        data = req.get_json() or {}
+        group_id = data.get("group_id")
+        playlist_id = data.get("playlist_id")
+        playlist_song_count = data.get("playlist_song_count")
+
+        if not group_id or not playlist_id:
+            return https_fn.Response(
+                json.dumps({"error": "Missing group_id or playlist_id"}),
+                status=400,
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+        db = get_db()
+        group_ref = db.collection("groups").document(group_id)
+        group_doc = group_ref.get()
+
+        if not group_doc.exists:
+            return https_fn.Response(
+                json.dumps({"error": "Group not found"}),
+                status=404,
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+        group = group_doc.to_dict()
+        if user_id not in group.get("members", []):
+            return https_fn.Response(
+                json.dumps({"error": "User not a group member"}),
+                status=403,
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+        group_ref.update(
+            {
+                "playlist_id": playlist_id,
+                "last_updated": firestore.SERVER_TIMESTAMP,
+                "playlist_song_count": playlist_song_count,
+            }
+        )
+
+        return https_fn.Response(
+            json.dumps({"success": True}),
+            status=200,
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
+    except Exception as e:
+        print(f"update_group_playlist error: {e}")
+        return https_fn.Response(
+            json.dumps({"error": str(e)}),
+            status=500,
+            headers={"Access-Control-Allow-Origin": "*"},
         )

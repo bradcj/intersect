@@ -22,3 +22,4 @@ hosting/.cache
 /public/firebase-config.js
 client_secret*.json
 
+/ignore/
